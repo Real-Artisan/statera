@@ -1,8 +1,18 @@
+import os
 from kubernetes import client, config
+
+def load_kubernetes_config():
+    """Load the appropriate Kubernetes configuration."""
+    if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
+        # Running inside a Kubernetes pod
+        config.load_incluster_config()
+    else:
+        # Running locally (e.g., for testing)
+        config.load_kube_config()
 
 def collect_cluster_data():
     """Fetch node and pod data from the Kubernetes cluster."""
-    config.load_kube_config()
+    load_kubernetes_config()
     v1 = client.CoreV1Api()
 
     # Collect node data
@@ -25,10 +35,12 @@ def collect_cluster_data():
                 requests = container.resources.requests or {}
                 pods.append({
                     "node": pod.spec.node_name,
-                    "cpu": parse_resource(requests.get("cpu", "0")),
-                    "memory": parse_resource(requests.get("memory", "0"))
+                    "cpu": parse_resource(requests.get("cpu", "50m")),  # Default fallback
+                    "memory": parse_resource(requests.get("memory", "64Mi"))  # Default fallback
                 })
 
+    print("Nodes:", nodes)
+    print("Pods:", pods)
     return nodes, pods
 
 def optimize_pod_resources(nodes, existing_pods, default_pod_requests):
@@ -81,7 +93,7 @@ def main():
     print("Collected Pod Data:", existing_pods)
 
     # Step 2: Define default pod resource requests for optimization
-    default_pod_requests = {"cpu": 250, "memory": 128 * 1024 * 1024}
+    default_pod_requests = {"cpu": 50, "memory": 64 * 1024 * 1024}
 
     # Step 3: Optimize resource allocation
     optimized_requests = optimize_pod_resources(nodes, existing_pods, default_pod_requests)
