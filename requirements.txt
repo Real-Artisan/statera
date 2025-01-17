@@ -1,1 +1,6 @@
 kubernetes
+Flask
+psycopg2-binary
+urllib3
+SQLAlchemy
+Flask-SQLAlchemy
