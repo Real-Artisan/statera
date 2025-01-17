@@ -13,3 +13,6 @@ Statera is designed to simplify this process. By leveraging the Kubernetes API, 
     Reduces the manual effort required to manage resource allocation.
 
 With Statera, you can focus on higher-level tasks, knowing that your cluster is running efficiently and effectively.
+
+### Docker Image
+You can find the Docker image for Statera on Docker Hub: [realartisan/statera](https://hub.docker.com/r/realartisan/statera)
