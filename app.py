@@ -33,42 +33,52 @@ def load_kube_config():
 
 def create_tables():
     """
-    Create all database tables.
-    This function initializes the database tables within the Flask application context.
+    Initializes the database by creating required tables if they do not already exist.
+
+    This function checks if the required tables are present in the database. If any of the
+    required tables are missing, it creates them. The function operates within the application
+    context and handles any exceptions that may occur during the process.
+
+    Required tables:
+    - pod_metrics
+
+    Prints:
+    - A message indicating whether the required tables were created or already exist.
+    - An error message if there is an issue initializing the database.
     """
     with app.app_context():
         try:
             # Check if the database is initialized and tables exist
             inspector = db.inspect(db.engine)
             tables = inspector.get_table_names()
-            if 'pod_metrics' not in tables:
+            required_tables = ['pod_metrics']
+            missing_tables = [table for table in required_tables if table not in tables]
+            if missing_tables:
                 db.create_all()
-                print("Database tables created.")
+                print(f"Database tables created: {', '.join(missing_tables)}.")
             else:
-                print("Database tables already exist.")
+                print("All required database tables already exist.")
         except Exception as e:
             print(f"Error initializing database: {e}")
 
 def collect_metrics():
     """
-    Collects metrics from Kubernetes pods in the "kube-system" namespace.
+    Collects metrics from the Kubernetes metrics server for all pods in the "kube-system" namespace.
 
-    This function uses the Kubernetes CustomObjectsApi to list custom objects
-    of kind "pods" in the "metrics.k8s.io/v1beta1" API group. It extracts CPU
-    and memory usage metrics for each container in each pod and returns them
-    as a list of dictionaries.
+    This function uses the Kubernetes CustomObjectsApi to list custom objects of kind "pods" in the 
+    "metrics.k8s.io/v1beta1" API group. It extracts CPU and memory usage for each container in each pod.
 
     Returns:
         list: A list of dictionaries, each containing the following keys:
-            - pod_name (str): The name of the pod.
-            - namespace (str): The namespace of the pod.
-            - container_name (str): The name of the container.
-            - cpu (str): The CPU usage of the container.
-            - memory (str): The memory usage of the container.
+            - "pod_name" (str): The name of the pod.
+            - "namespace" (str): The namespace of the pod.
+            - "container_name" (str): The name of the container.
+            - "cpu" (str): The CPU usage of the container.
+            - "memory" (str): The memory usage of the container.
 
     Raises:
-        urllib3.exceptions.MaxRetryError: If the maximum number of retries is exceeded.
-        Exception: For any other errors that occur while collecting metrics.
+        urllib3.exceptions.MaxRetryError: If the maximum number of retries is exceeded when making the API call.
+        Exception: For any other exceptions that occur during the API call.
     """
     namespace = "kube-system"
     api_instance = client.CustomObjectsApi()
@@ -95,22 +105,66 @@ def collect_metrics():
     except Exception as e:
         print(f"Error collecting metrics: {e}")
 
-def save_metrics_to_db(metrics):
+def preprocess_metrics(metrics):
     """
-    Save a list of pod metrics to the database.
+    Preprocess a list of metrics by converting CPU and memory values to standard units.
+    Args:
+        metrics (list of dict): A list of dictionaries where each dictionary contains
+                                'cpu' and 'memory' keys with their respective values.
+    Returns:
+        list of dict: The input list with 'cpu' values converted to millicores and
+                      'memory' values converted to MiB.
+    """
+    def convert_cpu(cpu_value):
+        """
+        Converts a CPU value from nanocores to millicores.
+
+        Args:
+            cpu_value (str): The CPU value as a string. If the value ends with 'n', it is considered to be in nanocores.
+
+        Returns:
+            float: The CPU value converted to millicores if it was in nanocores.
+            str: The original CPU value if it was already in millicores.
+        """
+        if cpu_value.endswith("n"):
+            return float(cpu_value[:-1]) // 1000000
+        return cpu_value # Already in millicores
+    
+    def convert_memory(memory_value):
+        """
+        Converts a memory value from KiB to MiB if it ends with "Ki".
+
+        Args:
+            memory_value (str): The memory value as a string, which may end with "Ki" indicating KiB.
+
+        Returns:
+            float: The memory value converted to MiB if it was in KiB.
+            str: The original memory value if it was already in MiB.
+        """
+        if memory_value.endswith("Ki"):
+            return float(memory_value[:-2]) / 1024
+        return memory_value # Already in MiB
+    
+    for metric in metrics:
+        metric["cpu"] = convert_cpu(metric["cpu"])
+        metric["memory"] = convert_memory(metric["memory"])
+    return metrics
+
+def store_metrics(metrics):
+    """
+    Stores a list of pod metrics in the database.
 
     Args:
         metrics (list): A list of dictionaries, where each dictionary contains
                         the following keys:
-                        - "pod_name" (str): The name of the pod.
-                        - "namespace" (str): The namespace of the pod.
-                        - "container_name" (str): The name of the container.
-                        - "cpu" (float): The CPU usage of the container.
-                        - "memory" (float): The memory usage of the container.
+                        - pod_name (str): The name of the pod.
+                        - namespace (str): The namespace of the pod.
+                        - container_name (str): The name of the container.
+                        - cpu (float): The CPU usage of the container.
+                        - memory (float): The memory usage of the container.
 
     Raises:
-        Exception: If there is an error while saving the metrics to the database,
-                   the transaction is rolled back and the exception is printed.
+        Exception: If there is an error storing the metrics in the database.
     """
     with app.app_context():
         try:
@@ -119,34 +173,41 @@ def save_metrics_to_db(metrics):
                     pod_name=metric["pod_name"],
                     namespace=metric["namespace"],
                     container_name=metric["container_name"],
-                    cpu_usage=metric["cpu"],
-                    memory_usage=metric["memory"],
+                    cpu=metric["cpu"],
+                    memory=metric["memory"]
                 )
                 db.session.add(pod_metric)
             db.session.commit()
-            print("Metrics saved to database.")
+            print(f"Stored {len(metrics)} metrics in the database -f store_metrics.")
         except Exception as e:
             db.session.rollback()
-            print(f"Error saving metrics to database: {e}")
+            print(f"Error storing metrics: {e}")
 
-def collect_and_save_metrics():
+def collect_preprocess_and_store_metrics():
     """
-    Collects metrics and saves them to the database.
+    Collects raw metrics, preprocesses them, and stores them in the database.
 
-    This function collects metrics using the `collect_metrics` function,
-    saves them to the database using the `save_metrics_to_db` function,
-    and prints the number of metrics collected and saved.
+    This function performs the following steps:
+    1. Collects raw metrics by calling the `collect_metrics` function.
+    2. Preprocesses the collected metrics by calling the `preprocess_metrics` function.
+    3. Attempts to store the processed metrics in the database by calling the `store_metrics` function.
+    4. Prints the number of metrics stored in the database if successful.
+    5. Catches and prints any exceptions that occur during the storage process.
 
-    Returns:
-        None
+    Raises:
+        Exception: If an error occurs during the storage of metrics.
     """
-    metrics = collect_metrics()
-    save_metrics_to_db(metrics)
-    print(f"Collected and saved {len(metrics)} metrics.")
+    raw_metrics = collect_metrics()
+    processed_metrics = preprocess_metrics(raw_metrics)
+    try:
+        store_metrics(processed_metrics)
+        print(f"Stored {len(processed_metrics)} metrics in the database -f collect_preprocess_and_store_metrics.")
+    except Exception as e:
+        print(f"Error in collect_preprocess_and_store_metrics: {e}")
 
 def query_metrics(limit=10):
     """
-    Query the latest PodMetrics from the database.
+    Query the most recent PodMetrics from the database.
 
     Args:
         limit (int): The maximum number of metrics to retrieve. Defaults to 10.
@@ -162,32 +223,42 @@ def query_metrics(limit=10):
         except Exception as e:
             print(f"Error querying metrics: {e}")
             return []
-        
+
 def display_metrics(limit=10):
     """
-    Display a list of metrics with details such as ID, Pod Name, Namespace, Container Name, CPU Usage, Memory Usage, and Timestamp.
+    Display metrics for a specified number of pods.
 
     Args:
-        limit (int, optional): The maximum number of metrics to display. Defaults to 10.
+        limit (int, optional): The number of metrics to display. Defaults to 10.
 
     Returns:
         None
+
+    Prints:
+        A formatted string for each metric containing:
+        - Pod name
+        - Namespace
+        - Container name
+        - CPU usage
+        - Memory usage
+        - Timestamp
     """
     metrics = query_metrics(limit)
     for metric in metrics:
-        print(f"ID: {metric.id}, Pod Name: {metric.pod_name}, Namespace: {metric.namespace}, Container Name: {metric.container_name}, CPU Usage: {metric.cpu_usage}, Memory Usage: {metric.memory_usage}, Timestamp: {metric.timestamp}")
-        
+        print(f"Pod: {metric.pod_name}, Namespace: {metric.namespace}, Container Name: {metric.container_name}, CPU: {metric.cpu}, Memory: {metric.memory}, Timestamp: {metric.timestamp}")
+
 def main():
     """
-    Main function to load Kubernetes configuration, create database tables, 
-    collect and save metrics, and display the collected metrics.
+    Main function to load Kubernetes configuration, create database tables,
+    collect, preprocess, and store metrics, and display the metrics.
 
-    The function performs the following steps:
+    This function performs the following steps:
     1. Attempts to load the Kubernetes configuration using `load_kube_config()`.
-       If an exception occurs, it prints an error message and exits.
+       If an exception occurs, it prints an error message and exits the function.
     2. Creates necessary database tables by calling `create_tables()`.
-    3. Collects and saves metrics by calling `collect_and_save_metrics()`.
-    4. Displays the collected metrics by calling `display_metrics()` and prints the result.
+    3. Collects, preprocesses, and stores metrics by calling 
+       `collect_preprocess_and_store_metrics()`.
+    4. Displays the collected metrics by calling `display_metrics()`.
     """
     try:
         load_kube_config()
@@ -195,8 +266,8 @@ def main():
         print(f"Error loading kube config: {e}")
         return
     create_tables()
-    collect_and_save_metrics()
-    print(display_metrics())
+    collect_preprocess_and_store_metrics()
+    display_metrics()
 
 if __name__ == "__main__":
     main()
