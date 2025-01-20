@@ -117,32 +117,30 @@ def preprocess_metrics(metrics):
     """
     def convert_cpu(cpu_value):
         """
-        Converts a CPU value from nanocores to millicores.
+        Convert CPU value from nanocores to millicores.
 
         Args:
-            cpu_value (str): The CPU value as a string. If the value ends with 'n', it is considered to be in nanocores.
+            cpu_value (str): The CPU value as a string, which may end with 'n' indicating nanocores.
 
         Returns:
-            float: The CPU value converted to millicores if it was in nanocores.
-            str: The original CPU value if it was already in millicores.
+            str: The CPU value converted to millicores if it was in nanocores, otherwise the original value.
         """
         if cpu_value.endswith("n"):
-            return float(cpu_value[:-1]) // 1000000
+            return f"{float(cpu_value[:-1]) // 1000000}m"
         return cpu_value # Already in millicores
     
     def convert_memory(memory_value):
         """
-        Converts a memory value from KiB to MiB if it ends with "Ki".
+        Convert memory value from KiB to MiB if necessary.
 
         Args:
             memory_value (str): The memory value as a string, which may end with "Ki" indicating KiB.
 
         Returns:
-            float: The memory value converted to MiB if it was in KiB.
-            str: The original memory value if it was already in MiB.
+            str: The memory value converted to MiB if it was in KiB, otherwise the original value.
         """
         if memory_value.endswith("Ki"):
-            return float(memory_value[:-2]) / 1024
+            return f"{float(memory_value[:-2]) / 1024}Mi"
         return memory_value # Already in MiB
     
     for metric in metrics:
