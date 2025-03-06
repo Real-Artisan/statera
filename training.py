@@ -1,86 +1,69 @@
-import pandas as pd
+# train_model.py
 import numpy as np
-from sklearn.model_selection import train_test_split
+import pandas as pd
+import joblib
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, r2_score
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import create_engine
-from app import app
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from database import create_app
 from models import db, PodMetrics
-# from app.models import PodMetrics
-import logging
+from preprocess import preprocess_value
 
-# Configure logging
-logging.basicConfig(level=logging.ERROR)
-logger = logging.getLogger(__name__)
+app = create_app()
 
-# Function to convert CPU and Memory values to numeric
-def convert_cpu(cpu_value):
-    if isinstance(cpu_value, str):
-        if cpu_value.endswith("n"):  # Convert nanocores to millicores
-            return float(cpu_value[:-1]) / 1e6
-        elif cpu_value.endswith("m"):  # Convert millicores to cores
-            return float(cpu_value[:-1]) / 1000
-    return float(cpu_value) if cpu_value else np.nan  # Already in cores
-
-def convert_memory(memory_value):
-    if isinstance(memory_value, str):
-        if memory_value.endswith("Ki"):  # Convert KiB to MiB
-            return float(memory_value[:-2]) / 1024
-        elif memory_value.endswith("Mi"):  # Already in MiB
-            return float(memory_value[:-2])
-    return float(memory_value) if memory_value else np.nan  # Already in MiB
-
-# Load data from database
-# Load data from database
-def load_data():
+def train_model():
     with app.app_context():
-        try:
-            engine = db.engine
-            session = db.session
-            query = session.query(PodMetrics).statement
-            data = pd.read_sql(f"{query}", con=engine)
-            # data = query
-            return data
-        except Exception as e:
-            logger.error(f"Error loading data from database: {e}")
+        data = PodMetrics.query.all()
+        print(f"Toatal records in DB: {len(data)}")
+
+        # Convert database objects to a DataFrame
+        df = pd.DataFrame([
+            {
+                "cpu_usage": preprocess_value(d.cpu_usage),
+                "memory_usage": preprocess_value(d.memory_usage),
+                "cpu_request": preprocess_value(d.cpu_request),
+                "cpu_limit": preprocess_value(d.cpu_limit),
+                "memory_request": preprocess_value(d.memory_request),
+                "memory_limit": preprocess_value(d.memory_limit)
+            }
+            for d in data
+        ])
+
+        print(f"Raw Data before processing: \n", df)
+        df.dropna()
+        print(f"Data after processing: \n", df)
+        print(df.dtypes)
+        print("Final Training Data Shape:", df.shape)
+        print("Final Training Data Preview:\n", df.head())
+        # Ensure data is valid
+        if df.empty:
+            print("No valid data for training.")
             return None
-        
-data = load_data()
 
-print(data)
+        # Define features (X) and targets (y)
+        X = df[["cpu_usage", "memory_usage"]]
+        y = df[["cpu_request", "cpu_limit", "memory_request", "memory_limit"]]
 
-# # Convert CPU and Memory values
-# data["cpu_usage"] = data["cpu_usage"].apply(lambda x: convert_cpu(x) if pd.notna(x) else np.nan)
-# data["memory_usage"] = data["memory_usage"].apply(lambda x: convert_memory(x) if pd.notna(x) else np.nan)
-# data["cpu_request"] = data["cpu_request"].apply(lambda x: convert_cpu(x) if pd.notna(x) else np.nan)
-# data["cpu_limit"] = data["cpu_limit"].apply(lambda x: convert_cpu(x) if pd.notna(x) else np.nan)
-# data["memory_request"] = data["memory_request"].apply(lambda x: convert_memory(x) if pd.notna(x) else np.nan)
-# data["memory_limit"] = data["memory_limit"].apply(lambda x: convert_memory(x) if pd.notna(x) else np.nan)
+        # Train/test split
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# # Drop unnecessary columns
-# data.drop(columns=["id", "pod_name", "namespace", "container_name", "timestamp"], inplace=True)
+        # Train Decision Tree model
+        model = DecisionTreeRegressor()
+        model.fit(X_train, y_train)
 
-# # Fill NaN values with 0 (assumes missing request/limit means unset)
-# data.fillna(0, inplace=True)
+        # Evaluate model
+        y_pred = model.predict(X_test)
+        mae = mean_absolute_error(y_test, y_pred)
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
 
-# # Define features and targets
-# X = data[["cpu_usage", "memory_usage"]]  # Features (usage metrics)
-# Y = data[["cpu_request", "cpu_limit", "memory_request", "memory_limit"]]  # Targets (requests/limits)
+        print(f"Model Performance:\n MAE: {mae}\n MSE: {mse}\n R² Score: {r2}")
 
-# # Split dataset into training and testing sets
-# X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+        # Save model
+        joblib.dump(model, "model.pkl")
+        print("Model saved as model.pkl")
 
-# # Train Random Forest Regressor
-# model = RandomForestRegressor(n_estimators=100, random_state=42)
-# model.fit(X_train, Y_train)
+        return model
 
-# # Predictions
-# Y_pred = model.predict(X_test)
-
-# # Evaluate the model
-# mae = mean_absolute_error(Y_test, Y_pred)
-# r2 = r2_score(Y_test, Y_pred)
-
-# print(f"Mean Absolute Error: {mae}")
-# print(f"R² Score: {r2}")
+train_model()

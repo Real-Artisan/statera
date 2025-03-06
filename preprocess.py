@@ -24,6 +24,36 @@ def parse_memory(memory_value):
         return float(memory_value[:-2]) * 1024
     return float(memory_value)
 
+def preprocess_value(value):
+    """Convert CPU and memory values to standard units (CPU in cores, Memory in MiB)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip().lower()
+        
+        # CPU Conversions
+        if value.endswith("n"):  # Nanocores to cores
+            return float(value[:-1]) / 1_000_000_000
+        elif value.endswith("m"):  # Millicores to cores
+            return float(value[:-1]) / 1_000
+        elif value.isdigit():  # Already in cores
+            return float(value)
+        
+        # Memory Conversions
+        if value.endswith("Ki"):  # Kibibytes to MiB
+            return float(value[:-2]) / 1024
+        elif value.endswith("Mi"):  # Already in MiB
+            return float(value[:-2])
+        elif value.endswith("Gi"):  # Gibibytes to MiB
+            return float(value[:-2]) * 1024
+        elif value.endswith("Ti"):  # Tebibytes to MiB
+            return float(value[:-2]) * 1_048_576  # 1024 * 1024
+
+    try:
+        return float(value)  # Return numeric values as they are
+    except ValueError:
+        return None  # If parsing fails, return None
+
 
 def preprocess_metrics(metrics):
     for metric in metrics:
